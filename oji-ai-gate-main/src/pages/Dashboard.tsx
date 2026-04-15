@@ -129,6 +129,7 @@ export default function Dashboard() {
   const [pgUploadFile, setPgUploadFile] = useState<File | null>(null);
   const [modelSearch, setModelSearch] = useState("");
   const [modelProvider, setModelProvider] = useState("all");
+  const [pageLoading, setPageLoading] = useState(true);
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -151,25 +152,36 @@ export default function Dashboard() {
 
   useEffect(() => {
     const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-      setUserId(session.user.id);
-      const { data: profile } = await supabase.from("profiles").select("username, email").eq("id", session.user.id).single();
-      if (profile) {
-        const p = profile as Record<string, unknown>;
-        if (!p.username) {
-          const name = session.user.user_metadata?.full_name || session.user.user_metadata?.name || (p.email as string)?.split("@")[0] || "user";
-          setDefaultUsername(name);
-          setShowUsernamePopup(true);
+      try {
+        setPageLoading(true);
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          navigate("/auth/login");
+          return;
         }
+        setUserId(session.user.id);
+        const { data: profile } = await supabase.from("profiles").select("username, email").eq("id", session.user.id).single();
+        if (profile) {
+          const p = profile as Record<string, unknown>;
+          if (!p.username) {
+            const name = session.user.user_metadata?.full_name || session.user.user_metadata?.name || (p.email as string)?.split("@")[0] || "user";
+            setDefaultUsername(name);
+            setShowUsernamePopup(true);
+          }
+        }
+        const { data: roles } = await supabase.from("user_roles").select("role").eq("user_id", session.user.id);
+        if (roles?.some((r: Record<string, unknown>) => r.role === "admin" || r.role === "owner")) setIsAdmin(true);
+      } catch (err) {
+        console.error("[v0] Dashboard init error:", err);
+        toast({ title: "Error loading dashboard", variant: "destructive" });
+      } finally {
+        setPageLoading(false);
       }
-      const { data: roles } = await supabase.from("user_roles").select("role").eq("user_id", session.user.id);
-      if (roles?.some((r: Record<string, unknown>) => r.role === "admin" || r.role === "owner")) setIsAdmin(true);
     };
     init();
     fetchKeys();
     fetchCoins();
-  }, [fetchKeys, fetchCoins]);
+  }, [fetchKeys, fetchCoins, navigate, toast]);
 
   const getExpiresAt = (): string | null => {
     if (newKeyExpiry === "never") return null;
@@ -284,6 +296,14 @@ export default function Dashboard() {
   });
 
   const providers = [...new Set(AI_MODELS.map(m => m.provider))];
+
+  if (pageLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="animate-pulse text-muted-foreground">Loading dashboard...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">

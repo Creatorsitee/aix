@@ -4,6 +4,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Send, Menu, Sparkles, ChevronDown, User, Bot, Loader2, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 interface Message {
   role: "user" | "assistant";
@@ -48,16 +50,28 @@ export default function Index() {
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const bufferRef = useRef<string>("");
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) navigate("/dashboard");
+      if (session) {
+        setIsAuthenticated(true);
+        navigate("/dashboard");
+      } else {
+        setIsAuthenticated(false);
+      }
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
-      if (session) navigate("/dashboard");
+      if (session) {
+        setIsAuthenticated(true);
+        navigate("/dashboard");
+      } else {
+        setIsAuthenticated(false);
+      }
     });
     return () => subscription.unsubscribe();
   }, [navigate]);
@@ -101,6 +115,7 @@ export default function Index() {
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let updateCounter = 0;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -120,16 +135,31 @@ export default function Index() {
             const content = parsed.choices?.[0]?.delta?.content;
             if (content) {
               assistantContent += content;
-              setMessages(prev => {
-                const last = prev[prev.length - 1];
-                if (last?.role === "assistant") {
-                  return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: assistantContent } : m);
-                }
-                return [...prev, { role: "assistant", content: assistantContent }];
-              });
+              // Batch updates every 3 tokens for better performance
+              updateCounter++;
+              if (updateCounter % 3 === 0 || assistantContent.length > 500) {
+                setMessages(prev => {
+                  const last = prev[prev.length - 1];
+                  if (last?.role === "assistant") {
+                    return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: assistantContent } : m);
+                  }
+                  return [...prev, { role: "assistant", content: assistantContent }];
+                });
+              }
             }
           } catch { /* partial JSON */ }
         }
+      }
+      
+      // Final update to ensure all content is rendered
+      if (assistantContent) {
+        setMessages(prev => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant") {
+            return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: assistantContent } : m);
+          }
+          return [...prev, { role: "assistant", content: assistantContent }];
+        });
       }
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === "AbortError") return;
@@ -173,12 +203,21 @@ export default function Index() {
             <span className="font-bold text-sm">OJI AI</span>
           </div>
           <div className="flex items-center gap-2">
-            <Link to="/auth/login">
-              <Button variant="outline" size="sm" className="border-primary/50 text-primary hover:bg-primary/10 text-xs h-8">Login</Button>
-            </Link>
-            <Link to="/auth/register">
-              <Button variant="outline" size="sm" className="border-primary/50 text-primary hover:bg-primary/10 text-xs h-8">Register</Button>
-            </Link>
+            {isAuthenticated ? (
+              <>
+                <Button onClick={() => navigate("/dashboard")} variant="outline" size="sm" className="border-primary/50 text-primary hover:bg-primary/10 text-xs h-8">Dashboard</Button>
+                <Button onClick={() => navigate("/profile")} variant="outline" size="sm" className="border-primary/50 text-primary hover:bg-primary/10 text-xs h-8">Profile</Button>
+              </>
+            ) : (
+              <>
+                <Link to="/auth/login">
+                  <Button variant="outline" size="sm" className="border-primary/50 text-primary hover:bg-primary/10 text-xs h-8">Login</Button>
+                </Link>
+                <Link to="/auth/register">
+                  <Button variant="outline" size="sm" className="border-primary/50 text-primary hover:bg-primary/10 text-xs h-8">Register</Button>
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -186,8 +225,18 @@ export default function Index() {
       {/* Mobile menu */}
       {menuOpen && (
         <div className="fixed inset-0 z-40 bg-[#0a0a12]/95 backdrop-blur-sm lg:hidden flex flex-col items-center justify-center gap-4" onClick={() => setMenuOpen(false)}>
-          <Link to="/auth/login"><Button variant="outline" size="lg" className="border-primary/50 text-primary w-48">Login</Button></Link>
-          <Link to="/auth/register"><Button variant="outline" size="lg" className="border-primary/50 text-primary w-48">Register</Button></Link>
+          {isAuthenticated ? (
+            <>
+              <div className="text-sm text-primary/70 mb-2">Chat History</div>
+              <Button onClick={() => navigate("/dashboard")} variant="outline" size="lg" className="border-primary/50 text-primary w-48">Dashboard</Button>
+              <Button onClick={() => navigate("/profile")} variant="outline" size="lg" className="border-primary/50 text-primary w-48">Profile</Button>
+            </>
+          ) : (
+            <>
+              <Link to="/auth/login"><Button variant="outline" size="lg" className="border-primary/50 text-primary w-48">Login</Button></Link>
+              <Link to="/auth/register"><Button variant="outline" size="lg" className="border-primary/50 text-primary w-48">Register</Button></Link>
+            </>
+          )}
         </div>
       )}
 
@@ -241,8 +290,33 @@ export default function Index() {
                       : "bg-[#16162a] text-[#d0d0e0]"
                   }`}>
                     {msg.role === "assistant" ? (
-                      <div className="prose prose-sm prose-invert max-w-none [&_p]:my-1 [&_pre]:bg-[#0d0d1a] [&_pre]:rounded-lg [&_pre]:p-3 [&_code]:text-primary/80 [&_ul]:my-1 [&_ol]:my-1">
-                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                      <div className="prose prose-sm prose-invert max-w-none [&_p]:my-1 [&_pre]:bg-[#0d0d1a] [&_pre]:rounded-lg [&_pre]:p-0 [&_code]:text-primary/80 [&_ul]:my-1 [&_ol]:my-1 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm">
+                        <ReactMarkdown
+                          components={{
+                            code({ inline, className, children, ...props }) {
+                              const match = /language-(\w+)/.exec(className || "");
+                              const lang = match ? match[1] : "text";
+                              return !inline ? (
+                                <SyntaxHighlighter
+                                  style={oneDark}
+                                  language={lang}
+                                  PreTag="div"
+                                  className="rounded-lg my-2 text-xs"
+                                  customStyle={{ margin: "0.5rem 0", padding: "0.75rem" }}
+                                  {...props}
+                                >
+                                  {String(children).replace(/\n$/, "")}
+                                </SyntaxHighlighter>
+                              ) : (
+                                <code className="bg-[#0d0d1a] px-1.5 py-0.5 rounded text-primary/80 text-xs" {...props}>
+                                  {children}
+                                </code>
+                              );
+                            }
+                          }}
+                        >
+                          {msg.content}
+                        </ReactMarkdown>
                       </div>
                     ) : (
                       <p className="whitespace-pre-wrap">{msg.content}</p>
